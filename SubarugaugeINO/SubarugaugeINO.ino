@@ -5,6 +5,11 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
+// Pino do botão
+#define buttonPin D5
+
+//pino do buzzer
+#define buzzer D6
 // Configurações da rede Wi-Fi (modo AP)
 const char* ssid = "SubaruGauge";
 const char* password = "lukebigcock";
@@ -12,8 +17,6 @@ const char* password = "lukebigcock";
 //config do display
 LiquidCrystal_I2C lcd(0x27, 20, 4); 
 
-// Pino do botão
-#define buttonPin D5
 
 int menuIndex = 4;  // Índice atual do menu
 bool inMenu = false;
@@ -57,6 +60,8 @@ void setup() {
 
   // Configuração do botão
   pinMode(buttonPin, INPUT_PULLUP);  // Botão ativo em LOW
+
+  pinMode(buzzer, OUTPUT); 
 
   // Configurando o ESP como Access Point
   WiFi.mode(WIFI_AP);
@@ -110,18 +115,17 @@ void loop() {
   ArduinoOTA.handle(); // Mantenha o OTA ativo
   monitoringBtn();
   if(!inMenu){
-    
     switch (menuIndex){
       case 0://Temperatura Agua
-        mainScreen();
+        waterTemp();
         monitoringBtn();
         break;
       case 1://Temperatura Oleo
-        mainScreen();
+        oilTemp();
         monitoringBtn();
         break;
       case 2://Pressao Oleo
-        oilPressure()();
+        oilPressure();
         monitoringBtn();
         break;
       case 3://Pressao Turbo
@@ -295,6 +299,78 @@ void oilPressure(){
 
   lcd.setCursor(4, 2);
   lcd.print("Bar");
+
+  unsigned long currentMillis = millis();  // Tempo atual
+
+  // Verifica se o intervalo de 1 segundo passou
+  if (currentMillis - previousMillis >= 500) {
+    // Atualiza o tempo do último número gerado
+    previousMillis = currentMillis;
+    currentBoostValue = random(0, 90);
+    displayProgress(currentBoostValue);
+    // Gera um número aleatório entre 0 e 100
+    lcd.setCursor(1, 2);
+    lcd.print(currentBoostValue);
+
+
+    lcd.setCursor(16, 2);
+    lcd.print(maxBoostValue);
+    
+  }
+}
+
+void waterTemp(){
+  if (currentBoostValue > maxBoostValue) {
+    maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
+  }
+
+  lcd.setCursor(1,0);
+  lcd.print("Temperatura de agua");
+
+  lcd.setCursor(0,1);
+  lcd.print("Atual:");
+
+  lcd.setCursor(14, 1);
+  lcd.print("Max:");
+
+  lcd.setCursor(4, 2);
+  lcd.print("Graus");
+
+  unsigned long currentMillis = millis();  // Tempo atual
+
+  // Verifica se o intervalo de 1 segundo passou
+  if (currentMillis - previousMillis >= 500) {
+    // Atualiza o tempo do último número gerado
+    previousMillis = currentMillis;
+    currentBoostValue = random(0, 90);
+    displayProgress(currentBoostValue);
+    // Gera um número aleatório entre 0 e 100
+    lcd.setCursor(1, 2);
+    lcd.print(currentBoostValue);
+
+
+    lcd.setCursor(16, 2);
+    lcd.print(maxBoostValue);
+    
+  }
+}
+
+void oilTemp(){
+  if (currentBoostValue > maxBoostValue) {
+    maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
+  }
+
+  lcd.setCursor(1,0);
+  lcd.print("Temperatura de oleo");
+
+  lcd.setCursor(0,1);
+  lcd.print("Atual:");
+
+  lcd.setCursor(14, 1);
+  lcd.print("Max:");
+
+  lcd.setCursor(4, 2);
+  lcd.print("Graus");
 
   unsigned long currentMillis = millis();  // Tempo atual
 
