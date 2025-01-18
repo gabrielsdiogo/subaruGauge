@@ -7,6 +7,7 @@
 #include <ESP8266WebServer.h>
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>   
+#include <FS.h> 
 
 // Pino do botão
 #define buttonPin D5
@@ -290,11 +291,14 @@ const char* password = "lukebigcock";
 LiquidCrystal_I2C lcd(0x27, 20, 4); 
 
 
-int menuIndex = 4;  // Índice atual do menu
+int menuIndex = 0;  // Índice atual do menu
 bool inMenu = false;
 unsigned long buttonPressStart = 0;
 bool buttonHeld = false;
 unsigned long previousMillis = 0;
+const char* unidadeMedida[] = {"Bar", "PSI"};
+int unidadeMedidaIndex;
+int menuOld;
 
 //Sensores maximos e atuais
 int maxBoostValue = 0;  // Variável para armazenar o valor máximo
@@ -302,11 +306,12 @@ int currentBoostValue = 0;
 
 // Itens do menu
 const char* menuItems[] = {
+  "Geral",
   "Temperatura Agua",
   "Temperatura Oleo",
   "Pressao Oleo",
   "Pressao Turbo",
-  "Geral"
+  "Alterar Medicao"
 };
 
 byte block[8] = {
@@ -331,6 +336,7 @@ void setup() {
   lcd.init();                       
   lcd.backlight();                  
   lcd.clear();  
+
   
 
   // Configuração do botão
@@ -383,11 +389,17 @@ void setup() {
   ArduinoOTA.begin();
   Serial.println("OTA iniciado.");
 
+  if (!SPIFFS.begin()) {
+    Serial.println("Erro ao inicializar SPIFFS");
+    return;
+  }
+  unidadeMedidaIndex = loadPreferences("config.json");
   lcd.setCursor(0,1);
   lcd.print("Hello Luke Big Cock");
   delay(2000);
   lcd.clear();
   mainScreen();
+  Serial.println(unidadeMedidaIndex);
 }
 
 void loop() {
@@ -397,26 +409,30 @@ void loop() {
   monitoringBtn();
   if(!inMenu){
     switch (menuIndex){
-      case 0://Temperatura Agua
-        waterTemp();
-        monitoringBtn();
-        break;
-      case 1://Temperatura Oleo
-        oilTemp();
-        monitoringBtn();
-        break;
-      case 2://Pressao Oleo
-        oilPressure();
-        monitoringBtn();
-        break;
-      case 3://Pressao Turbo
-        boost();
-        monitoringBtn();
-        break;
-      case 4:// geral
+      case 0:// geral
         mainScreen();
         monitoringBtn();
         break;     
+      case 1://Temperatura Agua
+        waterTemp();
+        monitoringBtn();
+        break;
+      case 2://Temperatura Oleo
+        oilTemp();
+        monitoringBtn();
+        break;
+      case 3://Pressao Oleo
+        oilPressure();
+        monitoringBtn();
+        break;
+      case 4://Pressao Turbo
+        boost();
+        monitoringBtn();
+        break;
+      case 5://Alterar unidade de medição
+        changeMeasure();
+        monitoringBtn();
+        break;
     }
   }
  
@@ -433,6 +449,7 @@ void monitoringBtn(){
     } else if (millis() - buttonPressStart >= 3000 && !inMenu) {
       // Abrir o menu após segurar por 3 segundos
       inMenu = true;
+      menuOld = menuIndex;
       menuIndex = 0;
       lcd.clear();
       displayMenu();
@@ -493,7 +510,7 @@ void mainScreen(){
   lcd.print("Temp");
 
   lcd.setCursor(14, 0);
-  lcd.print("BAR");
+  lcd.print(String(unidadeMedida[unidadeMedidaIndex]));
 
   lcd.setCursor(0, 1);
   lcd.print("Agua:");
@@ -528,6 +545,29 @@ void mainScreen(){
 
 }
 
+void changeMeasure(){
+
+  if(unidadeMedidaIndex == 0){
+    unidadeMedidaIndex = 1;
+  }else if(unidadeMedidaIndex == 1){
+    unidadeMedidaIndex = 0;
+  }
+
+  savePreferences("config.json", unidadeMedidaIndex);
+  
+  lcd.setCursor(1,1);
+  lcd.print("Unidade de medicao" );
+
+  lcd.setCursor(1,3);
+  lcd.print("alterada para " + String(unidadeMedida[unidadeMedidaIndex]));
+
+  delay(2000);
+  lcd.clear();
+
+  menuIndex = menuOld;
+
+}
+
 void boost(){
   if (currentBoostValue > maxBoostValue) {
     maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
@@ -543,7 +583,7 @@ void boost(){
   lcd.print("Max:");
 
   lcd.setCursor(4, 2);
-  lcd.print("Bar");
+  lcd.print(String(unidadeMedida[unidadeMedidaIndex]));
 
   unsigned long currentMillis = millis();  // Tempo atual
 
@@ -579,7 +619,7 @@ void oilPressure(){
   lcd.print("Max:");
 
   lcd.setCursor(4, 2);
-  lcd.print("Bar");
+  lcd.print(String(unidadeMedida[unidadeMedidaIndex]));
 
   unsigned long currentMillis = millis();  // Tempo atual
 
@@ -685,4 +725,39 @@ void displayProgress(int percent) {
       lcd.print(" "); // Deixa o espaço vazio
     }
   }
+}
+
+void savePreferences(const char* filename, int unidade) {
+  File file = SPIFFS.open(filename, "w");
+  if (!file) {
+    Serial.println("Erro ao abrir arquivo para escrita");
+    return;
+  }
+
+  StaticJsonDocument<128> doc;
+  doc["unidadeMedicao"] = unidade;
+
+  serializeJson(doc, file);
+  file.close();
+  Serial.println("Preferências salvas.");
+}
+
+
+int loadPreferences(const char* filename) {
+  File file = SPIFFS.open(filename, "r");
+  if (!file) {
+    Serial.println("Erro ao abrir arquivo para leitura");
+  }
+
+  StaticJsonDocument<128> doc;
+  DeserializationError error = deserializeJson(doc, file);
+  if (error) {
+    Serial.print("Erro ao ler JSON: ");
+    Serial.println(error.f_str());
+  }
+
+  int unidade = doc["unidadeMedicao"];
+  file.close();
+
+  return unidade; 
 }
