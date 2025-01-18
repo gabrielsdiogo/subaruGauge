@@ -4,12 +4,284 @@
 #include <ArduinoOTA.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <ESP8266WebServer.h>
+#include <WebSocketsServer.h>
+#include <ArduinoJson.h>   
 
 // Pino do botão
 #define buttonPin D5
 
 //pino do buzzer
 #define buzzer D6
+
+ESP8266WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81); 
+
+const char htmlCode[] = R"=====(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subaru Gauges</title>
+    <style>
+        @keyframes progress {
+            0% { --percentage: 0; }
+            100% { --percentage: var(--value); }
+        }
+
+        @property --percentage {
+            syntax: '<number>';
+            inherits: true;
+            initial-value: 0;
+        }
+
+        [role="progressbar"], [role="fuelTemp"] {
+            animation: progress 2s 0.5s forwards;
+            width: 140px;
+            aspect-ratio: 2 / 1;
+            border-radius: 50% / 100% 100% 0 0;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        [role="progressbar"]::before, [role="fuelTemp"]::before {
+            --percentage: var(--value);
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: conic-gradient(
+                from 0.75turn at 50% 100%, 
+                var(--primary, #339974) calc(var(--percentage) * 1% / 2), 
+                white calc(var(--percentage) * 1% / 2 + 0.1%)
+            );
+            mask: radial-gradient(at 50% 100%, white 55%, transparent 55.5%);
+            -webkit-mask: radial-gradient(at 50% 100%, #0000 55%, #000 55.5%);
+        }
+
+        [role="progressbar"]::after, [role="fuelTemp"]::after {
+            counter-reset: percentage var(--value);
+            content: counter(percentage) var(--unit, '%');
+            font-family: Helvetica, Arial, sans-serif;
+            font-size: 18px;
+            color: white;
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            padding: 10px;
+        }
+
+        .graph-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            width: 45%; /* Ocupa 45% para dois gráficos lado a lado */
+            max-width: 160px;
+        }
+
+        span {
+            color: antiquewhite;
+            font-size: 14px;
+            font-family: Helvetica, Arial, sans-serif;
+            text-align: center;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #282a35;
+            color: antiquewhite;
+            font-family: Helvetica, Arial, sans-serif;
+            height: 100vh;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-size: 22px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .btn-config {
+            background-color: #339974;
+            color: white;
+            font-family: Helvetica, Arial, sans-serif;
+            font-size: 16px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: background-color 0.3s;
+        }
+
+        .btn-config:hover {
+            background-color: #2b7d63;
+        }
+
+        .form-container {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 47%;
+            transform: translate(-47%, -50%);
+            background: #393e4d;
+            padding: 34px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            width: 80%;
+            max-width: 400px;
+        }
+
+        .form-container label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .form-container input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        .form-container .btn-save {
+            background-color: #339974;
+            color: white;
+            font-size: 16px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            float: right;
+            transition: background-color 0.3s;
+        }
+
+        .form-container .btn-save:hover {
+            background-color: #2b7d63;
+        }
+
+        .form-container .close-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 20px;
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            cursor: pointer;
+        }
+
+        .message {
+            display: none;
+            background: #339974;
+            color: white;
+            font-size: 16px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-align: center;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Subaru Gauges</h1>
+    <div class="container">
+        <div class="graph-container">
+            <div id="waterTemp" role="progressbar" style="--value: 0; --unit: '°C';"></div>
+            <span>Temperatura de água</span>
+        </div>
+        <div class="graph-container">
+            <div id="oilTemp" role="fuelTemp" style="--value: 0; --unit: '°C';"></div>
+            <span>Temperatura de óleo</span>
+        </div>
+        <div class="graph-container">
+            <div id="turboPressure" role="progressbar" style="--value: 0; --unit: 'Bar';"></div>
+            <span>Pressão de turbo</span>
+        </div>
+        <div class="graph-container">
+            <div id="oilPressure" role="fuelTemp" style="--value: 0; --unit: 'Bar';"></div>
+            <span>Pressão de óleo</span>
+        </div>
+    </div>
+    <button class="btn-config" onclick="openForm()">Configurar avisos</button>
+    <div class="message" id="message">Os avisos foram configurados</div>
+
+    <div class="form-container" id="configForm">
+        <button class="close-btn" onclick="closeForm()">×</button>
+        <label for="waterTempInput">Temperatura de água</label>
+        <input type="text" id="waterTempInput">
+        <label for="oilTempInput">Temperatura de óleo</label>
+        <input type="text" id="oilTempInput">
+        <label for="turboPressureInput">Pressão de turbo</label>
+        <input type="text" id="turboPressureInput">
+        <label for="oilPressureInput">Pressão de óleo</label>
+        <input type="text" id="oilPressureInput">
+        <button class="btn-save" onclick="saveForm()">Salvar</button>
+    </div>
+
+    <script>
+        function openForm() {
+            document.getElementById('configForm').style.display = 'block';
+        }
+
+        function closeForm() {
+            document.getElementById('configForm').style.display = 'none';
+        }
+
+        function saveForm() {
+            closeForm();
+            const message = document.getElementById('message');
+            message.style.display = 'block';
+            setTimeout(() => {
+                message.style.display = 'none';
+            }, 3000); // Exibe a mensagem por 3 segundos
+        }
+
+        var Socket;
+        function init() {
+            Socket = new WebSocket('ws://' + window.location.hostname + ':81/');
+            Socket.onmessage = function (event) {
+                processCommand(event);
+            };
+        }
+
+        function processCommand(event) {
+            var obj = JSON.parse(event.data);
+
+            document.getElementById('waterTemp').style = "--value: " + obj.waterTemp + "; --unit: '°C';";
+            document.getElementById('oilTemp').style = "--value: " + obj.oilTemp + "; --unit: '°C';";
+            document.getElementById('turboPressure').style = "--value: " + obj.turboPressure + "; --unit: 'Bar';";
+            document.getElementById('oilPressure').style = "--value: " + obj.oilPressure + "; --unit: 'Bar';";
+        }
+
+        window.onload = function (event) {
+            init();
+        }
+    </script>
+</body>
+</html>
+)=====";
+
 // Configurações da rede Wi-Fi (modo AP)
 const char* ssid = "SubaruGauge";
 const char* password = "lukebigcock";
@@ -50,6 +322,9 @@ byte block[8] = {
 
 const int menuSize = sizeof(menuItems) / sizeof(menuItems[0]);
 
+void handleRoot() {
+  server.send(200, "text/html", htmlCode);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -70,6 +345,10 @@ void setup() {
   IPAddress IP = WiFi.softAPIP();
   Serial.print("IP do Access Point: ");
   Serial.println(IP);
+  server.on("/", handleRoot);
+  server.begin();
+  Serial.println("HTTP server started");
+  webSocket.begin();
 
   // Configuração do OTA
   ArduinoOTA.onStart([]() {
@@ -113,6 +392,8 @@ void setup() {
 
 void loop() {
   ArduinoOTA.handle(); // Mantenha o OTA ativo
+  server.handleClient();
+  webSocket.loop();
   monitoringBtn();
   if(!inMenu){
     switch (menuIndex){
