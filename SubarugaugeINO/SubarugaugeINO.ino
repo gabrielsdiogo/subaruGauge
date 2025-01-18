@@ -111,8 +111,9 @@ const char htmlCode[] = R"=====(
             color: antiquewhite;
             font-family: Helvetica, Arial, sans-serif;
             height: 100vh;
-            padding: 10px;
+            padding: 0;
             box-sizing: border-box;
+            overflow: hidden; /* Impede a barra de rolagem */
         }
 
         h1 {
@@ -142,8 +143,8 @@ const char htmlCode[] = R"=====(
             display: none;
             position: fixed;
             top: 50%;
-            left: 47%;
-            transform: translate(-47%, -50%);
+            left: 50%;
+            transform: translate(-50%, -50%);
             background: #393e4d;
             padding: 34px;
             border-radius: 10px;
