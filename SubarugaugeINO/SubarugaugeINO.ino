@@ -1,5 +1,6 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
+#include <DNSServer.h>
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <Wire.h>
@@ -17,6 +18,7 @@
 
 ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81); 
+DNSServer dnsServer;
 
 const char htmlCode[] = R"=====(
 <!DOCTYPE html>
@@ -348,10 +350,11 @@ void setup() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
 
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("IP do Access Point: ");
-  Serial.println(IP);
-  server.on("/", handleRoot);
+  dnsServer.start(53, "*", WiFi.softAPIP());
+  // server.on("/", handleRoot);
+  server.onNotFound([]() {
+    server.send(200, "text/html", htmlCode);
+  });
   server.begin();
   Serial.println("HTTP server started");
   webSocket.begin();
@@ -403,6 +406,7 @@ void setup() {
 }
 
 void loop() {
+  dnsServer.processNextRequest();
   ArduinoOTA.handle(); // Mantenha o OTA ativo
   server.handleClient();
   webSocket.loop();
