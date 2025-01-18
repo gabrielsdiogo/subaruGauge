@@ -274,8 +274,8 @@ const char htmlCode[] = R"=====(
 
             document.getElementById('waterTemp').style = "--value: " + obj.waterTemp + "; --unit: '°C';";
             document.getElementById('oilTemp').style = "--value: " + obj.oilTemp + "; --unit: '°C';";
-            document.getElementById('turboPressure').style = "--value: " + obj.turboPressure + "; --unit: 'Bar';";
-            document.getElementById('oilPressure').style = "--value: " + obj.oilPressure + "; --unit: 'Bar';";
+            document.getElementById('turboPressure').style = "--value: " + obj.turboPressure + "; --unit: '" + obj.unit + "';";
+            document.getElementById('oilPressure').style = "--value: " + obj.oilPressure + "; --unit: '" + obj.unit + "';";
         }
 
         window.onload = function (event) {
@@ -299,6 +299,7 @@ bool inMenu = false;
 unsigned long buttonPressStart = 0;
 bool buttonHeld = false;
 unsigned long previousMillis = 0;
+unsigned long previousMillisWeb = 0;
 const char* unidadeMedida[] = {"Bar", "PSI"};
 int unidadeMedidaIndex;
 int menuOld;
@@ -424,8 +425,25 @@ void loop() {
 
   String jsonString = "";                           // create a JSON string for sending data to the client
   StaticJsonDocument<200> doc;
+  unsigned long currentMillis = millis();  // Tempo atual
 
+  // Verifica se o intervalo de 1 segundo passou
+  if (currentMillis - previousMillisWeb >= 500) {
+    // Atualiza o tempo do último número gerado
+    previousMillisWeb = currentMillis;
+    webUpdate();
+    JsonObject object = doc.to<JsonObject>();  
+    object["oilPressure"] = currentOilPressure;                   
+    object["turboPressure"] = currentBoostValue;
+    object["oilTemp"] = currentOilTemp;                   
+    object["waterTemp"] = currentWaterTemp;
+    object["unit"] = String(unidadeMedida[unidadeMedidaIndex]);
+    serializeJson(doc, jsonString);                   // convert JSON object to string
+    Serial.println(jsonString);
+  }
+  
   if(!inMenu){
+    webSocket.broadcastTXT(jsonString); 
     switch (menuIndex){
       case 0:// geral
         mainScreen();
@@ -453,20 +471,19 @@ void loop() {
         break;
     }
   }
+  
+}
 
-  JsonObject object = doc.to<JsonObject>();         // create a JSON Object
-  object["oilPressure"] = currentOilPressure;                   
-  object["turboPressure"] = currentBoostValue;
-  object["oilTemp"] = currentOilTemp;                   
-  object["waterTemp"] = currentWaterTemp;
-  serializeJson(doc, jsonString);                   // convert JSON object to string
-  Serial.println(jsonString);                       // print JSON string to console for debug purposes (you can comment this out)
-  webSocket.broadcastTXT(jsonString); 
-
+void webUpdate(){
+  currentOilPressure = random(0, 90);
+  currentBoostValue = random(0, 90);
+  currentOilTemp = random(0, 90);
+  currentWaterTemp = random(0, 90);
 }
 
 void monitoringBtn(){
   bool buttonState = digitalRead(buttonPin) == LOW;
+
 
   // Lógica para segurar o botão
   if (buttonState) {
@@ -496,6 +513,7 @@ void monitoringBtn(){
     }
     buttonHeld = false;
   }
+  
 }
 
 
