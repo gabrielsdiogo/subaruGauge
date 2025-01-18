@@ -303,8 +303,17 @@ int unidadeMedidaIndex;
 int menuOld;
 
 //Sensores maximos e atuais
-int maxBoostValue = 0;  // Variável para armazenar o valor máximo
+int maxBoostValue = 0;
 int currentBoostValue = 0;
+
+int currentOilPressure = 0;
+int maxOilPressure = 0;
+
+int currentWaterTemp = 0;
+int maxWaterTemp = 0;
+
+int currentOilTemp = 0;
+int maxOilTemp = 0;
 
 // Itens do menu
 const char* menuItems[] = {
@@ -411,6 +420,10 @@ void loop() {
   server.handleClient();
   webSocket.loop();
   monitoringBtn();
+
+  String jsonString = "";                           // create a JSON string for sending data to the client
+  StaticJsonDocument<200> doc;
+
   if(!inMenu){
     switch (menuIndex){
       case 0:// geral
@@ -439,7 +452,16 @@ void loop() {
         break;
     }
   }
- 
+
+  JsonObject object = doc.to<JsonObject>();         // create a JSON Object
+  object["oilPressure"] = currentOilPressure;                   
+  object["turboPressure"] = currentBoostValue;
+  object["oilTemp"] = currentOilTemp;                   
+  object["waterTemp"] = currentWaterTemp;
+  serializeJson(doc, jsonString);                   // convert JSON object to string
+  Serial.println(jsonString);                       // print JSON string to console for debug purposes (you can comment this out)
+  webSocket.broadcastTXT(jsonString); 
+
 }
 
 void monitoringBtn(){
@@ -531,19 +553,23 @@ void mainScreen(){
     previousMillis = currentMillis;
 
     // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(6, 1);
-    lcd.print(random(0, 90));
+    lcd.setCursor(6, 1);//water temp
+    currentWaterTemp = random(0, 90);
+    lcd.print(currentWaterTemp);
 
 
-    lcd.setCursor(6, 3);
-    lcd.print(random(0, 90));
+    lcd.setCursor(6, 3);// oil temp
+    currentOilTemp = random(0, 90);
+    lcd.print(currentOilTemp);
 
-    lcd.setCursor(15, 1);
-    lcd.print(random(0, 90));
+    lcd.setCursor(15, 1);// boost pressure
+    currentBoostValue = random(0, 90);
+    lcd.print(currentBoostValue);
 
 
-    lcd.setCursor(15, 3);
-    lcd.print(random(0, 90));
+    lcd.setCursor(15, 3);// oil pressure
+    currentOilPressure = random(0, 90);
+    lcd.print(currentOilPressure);
     
   }
 
@@ -609,8 +635,8 @@ void boost(){
 }
 
 void oilPressure(){
-  if (currentBoostValue > maxBoostValue) {
-    maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
+  if (currentOilPressure > maxOilPressure) {
+    maxOilPressure = currentOilPressure;  // Atualiza o valor máximo
   }
 
   lcd.setCursor(2,0);
@@ -631,22 +657,22 @@ void oilPressure(){
   if (currentMillis - previousMillis >= 500) {
     // Atualiza o tempo do último número gerado
     previousMillis = currentMillis;
-    currentBoostValue = random(0, 90);
-    displayProgress(currentBoostValue);
+    currentOilPressure = random(0, 90);
+    displayProgress(currentOilPressure);
     // Gera um número aleatório entre 0 e 100
     lcd.setCursor(1, 2);
-    lcd.print(currentBoostValue);
+    lcd.print(currentOilPressure);
 
 
     lcd.setCursor(16, 2);
-    lcd.print(maxBoostValue);
+    lcd.print(maxOilPressure);
     
   }
 }
 
 void waterTemp(){
-  if (currentBoostValue > maxBoostValue) {
-    maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
+  if (currentWaterTemp > maxWaterTemp) {
+    maxWaterTemp = currentWaterTemp;  // Atualiza o valor máximo
   }
 
   lcd.setCursor(1,0);
@@ -667,22 +693,22 @@ void waterTemp(){
   if (currentMillis - previousMillis >= 500) {
     // Atualiza o tempo do último número gerado
     previousMillis = currentMillis;
-    currentBoostValue = random(0, 90);
-    displayProgress(currentBoostValue);
+    currentWaterTemp = random(0, 90);
+    displayProgress(currentWaterTemp);
     // Gera um número aleatório entre 0 e 100
     lcd.setCursor(1, 2);
-    lcd.print(currentBoostValue);
+    lcd.print(currentWaterTemp);
 
 
     lcd.setCursor(16, 2);
-    lcd.print(maxBoostValue);
+    lcd.print(maxWaterTemp);
     
   }
 }
 
 void oilTemp(){
-  if (currentBoostValue > maxBoostValue) {
-    maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
+  if (currentOilTemp > maxOilTemp) {
+    maxOilTemp = currentOilTemp;  // Atualiza o valor máximo
   }
 
   lcd.setCursor(1,0);
@@ -703,15 +729,15 @@ void oilTemp(){
   if (currentMillis - previousMillis >= 500) {
     // Atualiza o tempo do último número gerado
     previousMillis = currentMillis;
-    currentBoostValue = random(0, 90);
-    displayProgress(currentBoostValue);
+    currentOilTemp = random(0, 90);
+    displayProgress(currentOilTemp);
     // Gera um número aleatório entre 0 e 100
     lcd.setCursor(1, 2);
-    lcd.print(currentBoostValue);
+    lcd.print(currentOilTemp);
 
 
     lcd.setCursor(16, 2);
-    lcd.print(maxBoostValue);
+    lcd.print(maxOilTemp);
     
   }
 }
