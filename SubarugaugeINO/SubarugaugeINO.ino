@@ -244,6 +244,13 @@ const char htmlCode[] = R"=====(
     </div>
 
     <script>
+        var Socket;
+        function init() {
+            Socket = new WebSocket('ws://' + window.location.hostname + ':81/');
+            Socket.onmessage = function (event) {
+                processCommand(event);
+            };
+        }
         function openForm() {
             document.getElementById('configForm').style.display = 'block';
         }
@@ -253,7 +260,31 @@ const char htmlCode[] = R"=====(
         }
 
         function saveForm() {
+            const waterTemp = document.getElementById('waterTempInput').value;
+            const oilTemp = document.getElementById('oilTempInput').value;
+            const turboPressure = document.getElementById('turboPressureInput').value;
+            const oilPressure = document.getElementById('oilPressureInput').value;
+
+            // Cria o objeto com os dados
+            const configData = {
+                waterTempWarning: waterTemp,
+                oilTempWarning: oilTemp,
+                turboPressureWarning: turboPressure,
+                oilPressureWarning: oilPressure
+            };
+
+            // Verifica se o WebSocket está conectado
+            if (Socket && Socket.readyState === WebSocket.OPEN) {
+                // Envia o objeto como JSON
+                Socket.send(JSON.stringify(configData));
+                console.log('Dados enviados:', configData);
+            } else {
+                console.error('WebSocket não está conectado.');
+            }
+
             closeForm();
+
+            // Exibe a mensagem de confirmação
             const message = document.getElementById('message');
             message.style.display = 'block';
             setTimeout(() => {
@@ -261,13 +292,6 @@ const char htmlCode[] = R"=====(
             }, 3000); // Exibe a mensagem por 3 segundos
         }
 
-        var Socket;
-        function init() {
-            Socket = new WebSocket('ws://' + window.location.hostname + ':81/');
-            Socket.onmessage = function (event) {
-                processCommand(event);
-            };
-        }
 
         function processCommand(event) {
             var obj = JSON.parse(event.data);
@@ -316,6 +340,12 @@ int maxWaterTemp = 0;
 
 int currentOilTemp = 0;
 int maxOilTemp = 0;
+
+//Avisos
+float waterTempWarning = 0;
+float oilTempWarning = 0;
+float turboPressureWarning = 0;
+float oilPressureWarning = 0;
 
 // Itens do menu
 const char* menuItems[] = {
@@ -369,6 +399,7 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started");
   webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
 
   // Configuração do OTA
   ArduinoOTA.onStart([]() {
@@ -407,7 +438,20 @@ void setup() {
     Serial.println("Erro ao inicializar SPIFFS");
     return;
   }
+  //carrega os dados salvos na memoria
+  StaticJsonDocument<200> warn;
+  deserializeJson(warn, loadWarnings("config.json"));
+
   unidadeMedidaIndex = loadPreferences("config.json");
+  waterTempWarning = warn["waterTempWarning"];
+  oilTempWarning = warn["oilTempWarning"];
+  turboPressureWarning = warn["turboPressureWarning"];
+  oilPressureWarning = warn["oilPressureWarning"];
+
+  Serial.print("water temp load: ");
+  Serial.println(waterTempWarning);
+
+
   lcd.setCursor(0,1);
   lcd.print("Hello Luke Big Cock");
   delay(2000);
@@ -791,6 +835,24 @@ void savePreferences(const char* filename, int unidade) {
   Serial.println("Preferências salvas.");
 }
 
+void saveWarnings(const char* filename, float waterTempWarn, float oilTempWarn, float turboPressureWarn, float oilPressureWarn) {
+  File file = SPIFFS.open(filename, "w");
+  if (!file) {
+    Serial.println("Erro ao abrir arquivo para escrita");
+    return;
+  }
+
+  StaticJsonDocument<128> doc;
+  doc["waterTempWarning"] = waterTempWarn;
+  doc["oilTempWarning"] = oilTempWarn;
+  doc["turboPressureWarning"] = turboPressureWarn;
+  doc["oilPressureWarning"] = oilPressureWarn;
+
+  serializeJson(doc, file);
+  file.close();
+  Serial.println("Avisos salvos.");
+}
+
 
 int loadPreferences(const char* filename) {
   File file = SPIFFS.open(filename, "r");
@@ -809,4 +871,63 @@ int loadPreferences(const char* filename) {
   file.close();
 
   return unidade; 
+}
+
+String loadWarnings(const char* filename) {
+  File file = SPIFFS.open(filename, "r");
+  if (!file) {
+    Serial.println("Erro ao abrir arquivo para leitura");
+  }
+
+  StaticJsonDocument<128> doc;
+  DeserializationError error = deserializeJson(doc, file);
+  if (error) {
+    Serial.print("Erro ao ler JSON: ");
+    Serial.println(error.f_str());
+  }
+  StaticJsonDocument<128> output;
+
+  output["waterTempWarning"] = doc["waterTempWarning"];
+  output["oilTempWarning"] = doc["oilTempWarning"];
+  output["turboPressureWarning"] = doc["turboPressureWarning"];
+  output["oilPressureWarning"] = doc["oilPressureWarning"];
+  file.close();
+
+  String jsonOutput;
+  serializeJson(output, jsonOutput);
+
+  return jsonOutput;
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_TEXT: // Mensagem de texto recebida
+      Serial.println("Mensagem recebida via WebSocket:");
+      Serial.println((char*)payload);
+
+      // Tenta parsear o JSON
+      StaticJsonDocument<200> doc2;
+      DeserializationError error = deserializeJson(doc2, payload, length);
+
+      if (error) {
+        Serial.print("Erro ao parsear JSON: ");
+        Serial.println(error.c_str());
+        return;
+      }
+
+      // Salva na memoria
+      saveWarnings("config.json", doc2["waterTempWarning"].as<float>(), doc2["oilTempWarning"].as<float>(), doc2["turboPressureWarning"].as<float>(), doc2["oilPressureWarning"].as<float>());
+
+
+      // Exibe os valores recebidos no Serial Monitor
+      Serial.println("Valores recebidos:");
+      Serial.printf("Temperatura da Água: %.2f°C\n", doc2["waterTempWarning"].as<float>());
+      Serial.printf("Temperatura do Óleo: %.2f°C\n",  doc2["oilTempWarning"].as<float>());
+      Serial.printf("Pressão do Turbo: %.2f Bar\n", doc2["turboPressureWarning"].as<float>());
+      Serial.printf("Pressão do Óleo: %.2f Bar\n", doc2["oilPressureWarning"].as<float>());
+
+      break;
+
+
+  }
 }
