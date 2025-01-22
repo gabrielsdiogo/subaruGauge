@@ -9,12 +9,22 @@
 #include <WebSocketsServer.h>
 #include <ArduinoJson.h>   
 #include <FS.h> 
+#include <Adafruit_ADS1X15.h>
 
 // Pino do botão
 #define buttonPin D5
 
 //pino do buzzer
 #define buzzer D6
+
+//ADS pino dos sensores
+#define waterTempPin 0
+#define oilTempPin 1
+#define boostPressPin 2
+#define oilPressPin 3
+
+// Configuração do ADS1115
+Adafruit_ADS1115 ads;
 
 ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81); 
@@ -70,7 +80,7 @@ const char htmlCode[] = R"=====(
 
         [role="progressbar"]::after, [role="fuelTemp"]::after {
             counter-reset: percentage var(--value);
-            content: counter(percentage) var(--unit, '%');
+            content: " ";
             font-family: Helvetica, Arial, sans-serif;
             font-size: 18px;
             color: white;
@@ -244,6 +254,7 @@ const char htmlCode[] = R"=====(
     </div>
 
     <script>
+        let executed = false;
         var Socket;
         function init() {
             Socket = new WebSocket('ws://' + window.location.hostname + ':81/');
@@ -300,6 +311,24 @@ const char htmlCode[] = R"=====(
             document.getElementById('oilTemp').style = "--value: " + obj.oilTemp + "; --unit: '°C';";
             document.getElementById('turboPressure').style = "--value: " + obj.turboPressure + "; --unit: '" + obj.unit + "';";
             document.getElementById('oilPressure').style = "--value: " + obj.oilPressure + "; --unit: '" + obj.unit + "';";
+
+            document.getElementById('waterTemp').innerText = `${obj.waterTemp} °C`;
+
+            // Preencher o innerText para o gráfico de Temperatura do óleo
+            document.getElementById('oilTemp').innerText = `${obj.oilTemp} °C`;
+
+            // Preencher o innerText para o gráfico de Pressão do turbo
+            document.getElementById('turboPressure').innerText = `${obj.turboPressure} ${obj.unit}`;
+
+            // Preencher o innerText para o gráfico de Pressão do óleo
+            document.getElementById('oilPressure').innerText = `${obj.oilPressure} ${obj.unit}`;
+            if (!executed){
+              document.getElementById('waterTempInput').value = obj.waterTempWarning;
+              document.getElementById('oilTempInput').value = obj.oilTempWarning;
+              document.getElementById('turboPressureInput').value = obj.turboPressureWarning;
+              document.getElementById('oilPressureInput').value = obj.oilPressureWarning;
+              executed = true;
+            }
         }
 
         window.onload = function (event) {
@@ -318,6 +347,12 @@ const char* password = "lukebigcock";
 LiquidCrystal_I2C lcd(0x27, 20, 4); 
 
 
+
+// Parâmetros do divisor de tensão
+const float Vcc = 5.0; // Tensão de alimentação (ajustada para 5V)
+const float R_fixo = 3000.0; // Resistor fixo (10kΩ)
+
+
 int menuIndex = 0;  // Índice atual do menu
 bool inMenu = false;
 unsigned long buttonPressStart = 0;
@@ -329,11 +364,11 @@ int unidadeMedidaIndex;
 int menuOld;
 
 //Sensores maximos e atuais
-int maxBoostValue = 0;
-int currentBoostValue = 0;
+float maxBoostValue = 0;
+float currentBoostValue = 0;
 
-int currentOilPressure = 0;
-int maxOilPressure = 0;
+float currentOilPressure = 0;
+float maxOilPressure = 0;
 
 int currentWaterTemp = 0;
 int maxWaterTemp = 0;
@@ -342,10 +377,17 @@ int currentOilTemp = 0;
 int maxOilTemp = 0;
 
 //Avisos
-float waterTempWarning = 0;
-float oilTempWarning = 0;
+int waterTempWarning = 0;
+int oilTempWarning = 0;
 float turboPressureWarning = 0;
 float oilPressureWarning = 0;
+
+//Controle dos avisos
+unsigned long lastWaterTempAlertTime = 0;
+unsigned long lastOilTempAlertTime = 0;
+unsigned long lastTurboPressureAlertTime = 0;
+unsigned long lastOilPressureAlertTime = 0;
+const unsigned long alertCooldown = 60000; // 1 minuto em milissegundos
 
 // Itens do menu
 const char* menuItems[] = {
@@ -375,17 +417,16 @@ void handleRoot() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  lcd.init();                       
-  lcd.backlight();                  
-  lcd.clear();  
-
-  
-
   // Configuração do botão
   pinMode(buttonPin, INPUT_PULLUP);  // Botão ativo em LOW
 
   pinMode(buzzer, OUTPUT); 
+
+  Serial.begin(115200);
+  lcd.init();                       
+  lcd.backlight();                  
+  lcd.clear();  
+  ads.begin();
 
   // Configurando o ESP como Access Point
   WiFi.mode(WIFI_AP);
@@ -448,16 +489,11 @@ void setup() {
   turboPressureWarning = warn["turboPressureWarning"];
   oilPressureWarning = warn["oilPressureWarning"];
 
-  Serial.print("water temp load: ");
-  Serial.println(waterTempWarning);
-
-
   lcd.setCursor(0,1);
   lcd.print("Hello Luke Big Cock");
   delay(2000);
   lcd.clear();
   mainScreen();
-  Serial.println(unidadeMedidaIndex);
 }
 
 void loop() {
@@ -466,6 +502,8 @@ void loop() {
   server.handleClient();
   webSocket.loop();
   monitoringBtn();
+  warningSensors();
+  
 
   String jsonString = "";                           // create a JSON string for sending data to the client
   StaticJsonDocument<200> doc;
@@ -475,19 +513,22 @@ void loop() {
   if (currentMillis - previousMillisWeb >= 500) {
     // Atualiza o tempo do último número gerado
     previousMillisWeb = currentMillis;
-    webUpdate();
     JsonObject object = doc.to<JsonObject>();  
     object["oilPressure"] = currentOilPressure;                   
     object["turboPressure"] = currentBoostValue;
     object["oilTemp"] = currentOilTemp;                   
     object["waterTemp"] = currentWaterTemp;
     object["unit"] = String(unidadeMedida[unidadeMedidaIndex]);
-    serializeJson(doc, jsonString);                   // convert JSON object to string
-    Serial.println(jsonString);
+    object["waterTempWarning"] = waterTempWarning;                   
+    object["oilTempWarning"] = oilTempWarning;
+    object["turboPressureWarning"] = turboPressureWarning;                   
+    object["oilPressureWarning"] = oilPressureWarning;
+    serializeJson(doc, jsonString);
   }
   
   if(!inMenu){
     webSocket.broadcastTXT(jsonString); 
+    webUpdate();
     switch (menuIndex){
       case 0:// geral
         mainScreen();
@@ -519,10 +560,26 @@ void loop() {
 }
 
 void webUpdate(){
-  currentOilPressure = random(0, 90);
-  currentBoostValue = random(0, 90);
+  int16_t waterTempRead = ads.readADC_SingleEnded(waterTempPin);
+  // int16_t oilTempRead = ads.readADC_SingleEnded(oilTempPin);
+  
+  // Conversão para tensão (5V / 16 bits = 0.0001875)
+  float vtgWaterTemp = waterTempRead * 0.0001875; 
+  // float vtgOilTemp = oilTempRead * 0.0001875;
+
+  // Calcular resistência do sensor
+  float waterTemp = R_fixo * (vtgWaterTemp / (Vcc - vtgWaterTemp));
+  // float oilTemp = R_fixo * (vtgOilTemp / (Vcc - vtgOilTemp));
+
+  // Calcular temperatura
+  float waterTempResult = calculateTemperature(waterTemp);
+  // float oilTempResult = calculateTemperature(oilTemp);
+
+
+  currentOilPressure = String(numeroAleatorio(1,10),1).toFloat();
+  currentBoostValue = String(numeroAleatorio(1,10),1).toFloat();
   currentOilTemp = random(0, 90);
-  currentWaterTemp = random(0, 90);
+  currentWaterTemp = (int)round(waterTempResult);
 }
 
 void monitoringBtn(){
@@ -608,33 +665,32 @@ void mainScreen(){
   lcd.print("Oleo:");
 
   
-  unsigned long currentMillis = millis();  // Tempo atual
 
-  // Verifica se o intervalo de 1 segundo passou
-  if (currentMillis - previousMillis >= 500) {
-    // Atualiza o tempo do último número gerado
-    previousMillis = currentMillis;
-
-    // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(6, 1);//water temp
-    currentWaterTemp = random(0, 90);
-    lcd.print(currentWaterTemp);
+  //limpa a ultima casa
+  lcd.setCursor(8, 1);
+  lcd.print(" ");
+  lcd.setCursor(6, 1);//water temp
+  lcd.print(currentWaterTemp);
 
 
-    lcd.setCursor(6, 3);// oil temp
-    currentOilTemp = random(0, 90);
-    lcd.print(currentOilTemp);
+  //limpa a ultima casa
+  lcd.setCursor(8, 3);
+  lcd.print(" ");
+  lcd.setCursor(6, 3);// oil temp
+  lcd.print(currentOilTemp);
 
-    lcd.setCursor(15, 1);// boost pressure
-    currentBoostValue = random(0, 90);
-    lcd.print(currentBoostValue);
+  //limpa a ultima casa
+  lcd.setCursor(18, 1);
+  lcd.print(" ");
+  lcd.setCursor(15, 1);// boost pressure
+  lcd.print(String(currentBoostValue, 1));
 
-
-    lcd.setCursor(15, 3);// oil pressure
-    currentOilPressure = random(0, 90);
-    lcd.print(currentOilPressure);
+  //limpa a ultima casa
+  lcd.setCursor(18, 3);
+  lcd.print(" ");
+  lcd.setCursor(15, 3);// oil pressure
+  lcd.print(String(currentOilPressure, 1));
     
-  }
 
 }
 
@@ -661,6 +717,66 @@ void changeMeasure(){
 
 }
 
+void warningSensors(){
+   unsigned long currentTime = millis();
+
+  if (currentTime - lastWaterTempAlertTime >= alertCooldown && currentWaterTemp >= waterTempWarning) {
+    lcd.clear();
+    lcd.setCursor(7, 0);
+    lcd.print("Aviso!");
+    lcd.setCursor(0, 2);
+    lcd.print("Temperatura de agua");
+    lcd.setCursor(6, 3);
+    lcd.print("excedida");
+    delay(5000);
+    lcd.clear();
+    lastWaterTempAlertTime = currentTime;
+  }
+
+  // Verifica a temperatura do óleo
+  if (currentTime - lastOilTempAlertTime >= alertCooldown && currentOilTemp >= oilTempWarning) {
+    lcd.clear();
+    lcd.setCursor(7, 0);
+    lcd.print("Aviso!");
+    lcd.setCursor(0, 2);
+    lcd.print("Temperatura de oleo");
+    lcd.setCursor(6, 3);
+    lcd.print("excedida");
+    delay(5000);
+    lcd.clear();
+    lastOilTempAlertTime = currentTime;
+  }
+
+  // Verifica a pressão do turbo
+  if (currentTime - lastTurboPressureAlertTime >= alertCooldown && currentBoostValue >= turboPressureWarning) {
+    lcd.clear();
+    lcd.setCursor(7, 0);
+    lcd.print("Aviso!");
+    lcd.setCursor(3, 2);
+    lcd.print("Pressao de turbo");
+    lcd.setCursor(6, 3);
+    lcd.print("excedida");
+    delay(5000);
+    lcd.clear();
+    lastTurboPressureAlertTime = currentTime;
+  }
+
+  // Verifica a pressão do óleo
+  if (currentTime - lastOilPressureAlertTime >= alertCooldown && currentOilPressure >= oilPressureWarning) {
+    lcd.clear();
+    lcd.setCursor(7, 0);
+    lcd.print("Aviso!");
+    lcd.setCursor(3, 2);
+    lcd.print("Pressao de oleo");
+    lcd.setCursor(6, 3);
+    lcd.print("excedida");
+    delay(5000);
+    lcd.clear();
+    lastOilPressureAlertTime = currentTime;
+  }
+
+}
+
 void boost(){
   if (currentBoostValue > maxBoostValue) {
     maxBoostValue = currentBoostValue;  // Atualiza o valor máximo
@@ -678,23 +794,16 @@ void boost(){
   lcd.setCursor(4, 2);
   lcd.print(String(unidadeMedida[unidadeMedidaIndex]));
 
-  unsigned long currentMillis = millis();  // Tempo atual
-
-  // Verifica se o intervalo de 1 segundo passou
-  if (currentMillis - previousMillis >= 500) {
-    // Atualiza o tempo do último número gerado
-    previousMillis = currentMillis;
-    currentBoostValue = random(0, 90);
-    displayProgress(currentBoostValue);
-    // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(1, 2);
-    lcd.print(currentBoostValue);
+  displayProgress(currentBoostValue, 10);
+  lcd.setCursor(1, 2);
+  lcd.print(String(currentBoostValue, 1));
 
 
-    lcd.setCursor(16, 2);
-    lcd.print(maxBoostValue);
+  lcd.setCursor(16, 2);
+  lcd.print(maxBoostValue);
+  lcd.print(String(maxBoostValue, 1));
     
-  }
+  
 }
 
 void oilPressure(){
@@ -711,26 +820,20 @@ void oilPressure(){
   lcd.setCursor(14, 1);
   lcd.print("Max:");
 
-  lcd.setCursor(4, 2);
+  lcd.setCursor(5, 2);
   lcd.print(String(unidadeMedida[unidadeMedidaIndex]));
 
-  unsigned long currentMillis = millis();  // Tempo atual
 
-  // Verifica se o intervalo de 1 segundo passou
-  if (currentMillis - previousMillis >= 500) {
-    // Atualiza o tempo do último número gerado
-    previousMillis = currentMillis;
-    currentOilPressure = random(0, 90);
-    displayProgress(currentOilPressure);
-    // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(1, 2);
-    lcd.print(currentOilPressure);
+  displayProgress(currentOilPressure, 10);
+
+  lcd.setCursor(1, 2);
+  lcd.print(String(currentOilPressure, 1));
 
 
-    lcd.setCursor(16, 2);
-    lcd.print(maxOilPressure);
+  lcd.setCursor(16, 2);
+  lcd.print(String(maxOilPressure, 1));
     
-  }
+  
 }
 
 void waterTemp(){
@@ -750,23 +853,21 @@ void waterTemp(){
   lcd.setCursor(4, 2);
   lcd.print("Graus");
 
-  unsigned long currentMillis = millis();  // Tempo atual
 
-  // Verifica se o intervalo de 1 segundo passou
-  if (currentMillis - previousMillis >= 500) {
-    // Atualiza o tempo do último número gerado
-    previousMillis = currentMillis;
-    currentWaterTemp = random(0, 90);
-    displayProgress(currentWaterTemp);
-    // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(1, 2);
-    lcd.print(currentWaterTemp);
+  displayProgress(currentWaterTemp, 100);
+  
+  //limpa a ultima casa
+  lcd.setCursor(3, 2);
+  lcd.print(" ");
+  lcd.setCursor(1, 2);
+  lcd.print(currentWaterTemp);
 
-
-    lcd.setCursor(16, 2);
-    lcd.print(maxWaterTemp);
+  lcd.setCursor(18, 2);
+  lcd.print(" ");
+  lcd.setCursor(16, 2);
+  lcd.print(maxWaterTemp);
     
-  }
+  
 }
 
 void oilTemp(){
@@ -786,29 +887,26 @@ void oilTemp(){
   lcd.setCursor(4, 2);
   lcd.print("Graus");
 
-  unsigned long currentMillis = millis();  // Tempo atual
 
-  // Verifica se o intervalo de 1 segundo passou
-  if (currentMillis - previousMillis >= 500) {
-    // Atualiza o tempo do último número gerado
-    previousMillis = currentMillis;
-    currentOilTemp = random(0, 90);
-    displayProgress(currentOilTemp);
-    // Gera um número aleatório entre 0 e 100
-    lcd.setCursor(1, 2);
-    lcd.print(currentOilTemp);
+  displayProgress(currentOilTemp, 120);
+  
+  lcd.setCursor(3, 2);
+  lcd.print(" ");
+  lcd.setCursor(1, 2);
+  lcd.print(currentOilTemp);
 
-
-    lcd.setCursor(16, 2);
-    lcd.print(maxOilTemp);
+  lcd.setCursor(18, 2);
+  lcd.print(" ");
+  lcd.setCursor(16, 2);
+  lcd.print(maxOilTemp);
     
-  }
+  
 }
 
-void displayProgress(int percent) {
+void displayProgress(int percent, int limit) {
   lcd.createChar(0, block);
   int totalBlocks = 16; // Número total de colunas na linha
-  int blocksToFill = map(percent, 0, 100, 0, totalBlocks); // Mapeia porcentagem para blocos
+  int blocksToFill = map(percent, 0, limit, 0, totalBlocks); // Mapeia porcentagem para blocos
 
   lcd.setCursor(0, 3); // Define o cursor para a segunda linha
   for (int i = 0; i < totalBlocks; i++) {
@@ -836,6 +934,11 @@ void savePreferences(const char* filename, int unidade) {
 }
 
 void saveWarnings(const char* filename, float waterTempWarn, float oilTempWarn, float turboPressureWarn, float oilPressureWarn) {
+  lcd.clear();
+  lcd.setCursor(7, 0);
+  lcd.print("Aviso!");
+  lcd.setCursor(0, 2);
+  lcd.print("Limites atualizados!");
   File file = SPIFFS.open(filename, "w");
   if (!file) {
     Serial.println("Erro ao abrir arquivo para escrita");
@@ -851,6 +954,8 @@ void saveWarnings(const char* filename, float waterTempWarn, float oilTempWarn, 
   serializeJson(doc, file);
   file.close();
   Serial.println("Avisos salvos.");
+  delay(5000);
+  lcd.clear();
 }
 
 
@@ -915,8 +1020,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
         return;
       }
 
+      waterTempWarning = doc2["waterTempWarning"].as<int>();
+      oilTempWarning = doc2["oilTempWarning"].as<int>();
+      turboPressureWarning = doc2["turboPressureWarning"].as<float>();
+      oilPressureWarning = doc2["oilPressureWarning"].as<float>();
+
       // Salva na memoria
-      saveWarnings("config.json", doc2["waterTempWarning"].as<float>(), doc2["oilTempWarning"].as<float>(), doc2["turboPressureWarning"].as<float>(), doc2["oilPressureWarning"].as<float>());
+      saveWarnings("config.json", waterTempWarning, oilTempWarning, turboPressureWarning, oilPressureWarning);
 
 
       // Exibe os valores recebidos no Serial Monitor
@@ -930,4 +1040,26 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length)
 
 
   }
+}
+
+float numeroAleatorio(int minimo, int maximo) {
+
+  int valor = random(minimo * 10, maximo * 10 + 1); 
+  
+  // Arredonda o valor para 1 casa decimal
+  float result = (float)valor / 10.0;
+  return result;
+}
+
+float calculateTemperature(float R) {
+  float temperature[] = {-40, -20, 0, 20, 40, 60, 80, 100, 120, 130};
+  float resistance[] = {100700, 25000, 6000, 2500, 1200, 600, 300, 150, 80, 50};
+
+  for (int i = 0; i < 8; i++) {
+    if (R >= resistance[i + 1] && R <= resistance[i]) {
+      // Interpolação linear
+      return temperature[i] + ((R - resistance[i]) / (resistance[i + 1] - resistance[i])) * (temperature[i + 1] - temperature[i]);
+    }
+  }
+  return -999;
 }
